@@ -12,6 +12,8 @@ from flask import Flask, render_template_string, request, redirect, url_for
 import matplotlib
 import json
 
+#export IEX_TOKEN=your_key_goes_here
+
 
 # non-interactive backend that does not require a GUI, and helps run
 # flask applications better
@@ -31,11 +33,20 @@ params = {'token': token}
 
 
 #get_stock function allows user to enter the stock symbol they want
+#volume close algo
+def Volume_close_algo(df):
+    df['Position'] = 0
+    df.loc[(df['volume'] > df['RollingMeanVolume']) & (df['close'] > df['close'].shift(1)), 'Position'] = 1
+    df.loc[(df['volume'] > df['RollingMeanVolume']) & (df['close'] < df['close'].shift(1)), 'Position'] = -1
+    return df
 
+#app decorator for base URL
 @app.route('/', methods=['GET', 'POST'])
 def get_stock():
     if request.method == 'POST':
+        #retrives the symbol
         symbol = request.form.get('symbol').lower()
+        #redirects to stock analysis function passing symbol as the url
         return redirect(url_for('stock_analysis', symbol=symbol))
     return '''
         <form method="POST">
@@ -44,57 +55,65 @@ def get_stock():
             <input type="submit" value="Submit">
         </form>
         '''
+        #one type text and one type submit was all that was needed
 
 
+    
+#takes symbol as the input
 @app.route('/<symbol>')
 def stock_analysis(symbol):
+
 
     resp = requests.get(base_url + '/status')
 
     quote_url = f"{base_url}/stock/{symbol}/quote"
     historical_url = f"{base_url}/stock/{symbol}/chart/1y"
 
+    #create arrays
+    
+    # historical_prices = []
+    # historical_timestamps = []
+    # volumes = []
     prices = []
     timestamps = []
-    historical_prices = []
-    historical_timestamps = []
-    volumes = []
-
     historical_resp = requests.get(historical_url, params=params)
     historical_resp.raise_for_status()
 
-    historical_data = historical_resp.json()
+    #historical_data = historical_resp.json()
+    #print(historical_data)
 
   # Create DataFrame from the historical data for price and volume
+    historical_df = pd.DataFrame.from_records(historical_resp.json())
+    historical_df['date'] = pd.to_datetime(historical_df['date'])
+    historical_df.set_index('date', inplace=True)
 
-    for data_point in historical_data: 
-        historical_prices.append(data_point['close'])
-        volumes.append(data_point['volume'])
-        timestamp = parse(data_point['date'])
-        historical_timestamps.append(timestamp)
+# pd.DataFrame.from_records(response.json()['data'])   #turns it directly to a dataframe
 
-    historical_df = pd.DataFrame({
-        'Price': historical_prices,
-        'Volume': volumes
-    }, index=historical_timestamps)
+
+    # for data_point in historical_data: 
+    #     historical_prices.append(data_point['close'])
+    #     volumes.append(data_point['volume'])
+    #     timestamp = parse(data_point['date'])
+    #     historical_timestamps.append(timestamp)
+
+    # historical_df = pd.DataFrame({
+    #     'Price': historical_prices,
+    #     'Volume': volumes
+    # }, index=historical_timestamps)
 
     window_size = 20  
     no_of_std = 1  
 
   #calculate rolling averages for price and volume
-    historical_df['RollingMeanPrice'] = historical_df['Price'].rolling(window_size).mean()
-    historical_df['RollingStdPrice'] = historical_df['Price'].rolling(window_size).std()
+    historical_df['RollingMeanPrice'] = historical_df['close'].rolling(window_size).mean()
+    historical_df['RollingStdPrice'] = historical_df['close'].rolling(window_size).std()
     historical_df['BollingerHigh'] = historical_df['RollingMeanPrice'] + (historical_df['RollingStdPrice'] * no_of_std)
     historical_df['BollingerLow'] = historical_df['RollingMeanPrice'] - (historical_df['RollingStdPrice'] * no_of_std)
-    historical_df['RollingMeanVolume'] = historical_df['Volume'].rolling(window_size).mean()
+    historical_df['RollingMeanVolume'] = historical_df['volume'].rolling(window_size).mean()
 
 
-    #volume close algo
-    def Volume_close_algo(df):
-        df['Position'] = 0
-        df.loc[(df['Volume'] > df['RollingMeanVolume']) & (df['Price'] > df['Price'].shift(1)), 'Position'] = 1
-        df.loc[(df['Volume'] > df['RollingMeanVolume']) & (df['Price'] < df['Price'].shift(1)), 'Position'] = -1
-        return df
+   
+
 
     historical_df = Volume_close_algo(historical_df)
 
@@ -127,7 +146,7 @@ def stock_analysis(symbol):
 
     #plot the historical data as well as the bollinger bands
     fig2, (ax2, ax3) = plt.subplots(2, 1, figsize=(8, 10), sharex=True)
-    ax2.plot(historical_df.index, historical_df['Price'], color='blue', label='Price')
+    ax2.plot(historical_df.index, historical_df['close'], color='blue', label='Price')
     ax2.plot(historical_df.index, historical_df['RollingMeanPrice'], color='black', label='Rolling Mean')
     ax2.plot(historical_df.index, historical_df['BollingerHigh'], color='red', label='Bollinger High')
     ax2.plot(historical_df.index, historical_df['BollingerLow'], color='green', label='Bollinger Low')
@@ -143,12 +162,14 @@ def stock_analysis(symbol):
     ax3.set_title('Trading Positions based on Volume and Close Price')
     ax3.legend()
 
+    #how to save the image and transmit it to the url
     buffer2 = io.BytesIO()
     fig2.savefig(buffer2, format='png')
     plt.close(fig2)  
 
     buffer1.seek(0)
     buffer2.seek(0)
+
     image_base64_1 = base64.b64encode(buffer1.getvalue()).decode('utf-8')
     image_base64_2 = base64.b64encode(buffer2.getvalue()).decode('utf-8')
 
@@ -190,3 +211,6 @@ def stock_analysis(symbol):
 
 if __name__ == '__main__':
      app.run(debug=False,port=5000)
+
+
+
